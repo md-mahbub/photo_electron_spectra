@@ -60,13 +60,15 @@ atoms = Atom.load_atoms_from_geometry(atom_list_str)
 Atom.assign_neighbors_to_atoms(BOND_DEFINITION_LIST, atoms, molecule_structure)
 
 # shadowing the original dom to make changes on the shadow and to save as output files
-new_dom = copy.deepcopy(dom)
-ref_transition = new_dom.findall('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"]')
-basis = new_dom.findall('basis')
+original_dyson_transition = dom.findall('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"]')
+basis = dom.findall('basis')
 n_of_basis_functions = int((basis[0]).get('n_of_basis_functions'))
 offset = 0
 
 for i, atom in enumerate(atoms):
+    new_dom = copy.deepcopy(dom)
+    original_dyson_transition = new_dom.findall('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"]')
+
     # for each atom get all the neighbors
     neighbors = atom.neighbors
     # from the neighbor list only keep inhome neighbors
@@ -82,7 +84,7 @@ for i, atom in enumerate(atoms):
     # find chunks of coefficients in the basis function list,
     # then keep those coefficients and make other's value 0
 
-    for dyson in ref_transition:
+    for dyson in original_dyson_transition:
         if dyson.get('comment') == 'dyson right':
             basis_func_string = dyson.get('text')
             basis_func_list = basis_func_string.split()
@@ -116,7 +118,7 @@ for i, atom in enumerate(atoms):
                     = basis_func_list[inhome_neighbor_start_idx: inhome_neighbor_end_idx + 1]
             dyson.set('text', ' '.join(modified_basis_func_left))
 
-    directory = './Data/' + atom.atom_name + str(i + 1)
+    directory = './data/' + atom.atom_name + str(i + 1)
     filepath = os.path.join(directory, FILE_NAME)
 
     try:
