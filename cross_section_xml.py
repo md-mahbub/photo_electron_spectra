@@ -1,7 +1,7 @@
 import os
-from xml.etree import ElementTree
-#from lxml import etree
-#from xml.dom import minidom
+from xml.etree import ElementTree as ET
+#from lxml import etre
+from xml.dom import minidom
 
 
 import os
@@ -10,6 +10,22 @@ import copy
 from Atom import *
 from Bond import *
 from MoleculeStruct import *
+
+
+def indent(elem, level=0):
+    i = "\n" + level * "  "
+    if len(elem):
+        if not elem.text or not elem.text.strip():
+            elem.text = i + "  "
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = i
+        for elem in elem:
+            indent(elem, level + 1)
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = i
+    else:
+        if level and (not elem.tail or not elem.tail.strip()):
+            elem.tail = i
 
 FILE_NAME = 'benzen.xml'
 XML_FILE_PATH = './data/'
@@ -51,8 +67,9 @@ molecule_structure = MoleculeStruct()
 molecule_structure.load(ATOM_DEFINITION_MAP, BOND_DEFINITION_LIST)
 
 full_file = os.path.abspath(os.path.join('data', FILE_NAME))
-dom = ElementTree.parse(FILE_NAME)
-geometry = dom.findall('geometry')
+tree = ET.parse(FILE_NAME)
+root = tree.getroot()
+geometry = tree.findall('geometry')
 atom_list_str = (geometry[0]).get('text')
 atoms = []
 atoms = Atom.load_atoms_from_geometry(atom_list_str)
@@ -60,13 +77,13 @@ atoms = Atom.load_atoms_from_geometry(atom_list_str)
 Atom.assign_neighbors_to_atoms(BOND_DEFINITION_LIST, atoms, molecule_structure)
 
 # shadowing the original dom to make changes on the shadow and to save as output files
-original_dyson_transition = dom.findall('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"]')
-basis = dom.findall('basis')
+original_dyson_transition = tree.findall('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"]')
+basis = tree.findall('basis')
 n_of_basis_functions = int((basis[0]).get('n_of_basis_functions'))
 offset = 0
 
 for i, atom in enumerate(atoms):
-    new_dom = copy.deepcopy(dom)
+    new_dom = copy.deepcopy(tree)
     original_dyson_transition = new_dom.findall('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"]')
 
     # for each atom get all the neighbors
@@ -74,16 +91,18 @@ for i, atom in enumerate(atoms):
     # from the neighbor list only keep inhome neighbors
     possible_inhome_neighbors = (molecule_structure.get_atom_definition_map()[atom.atom_name]).possible_inhome_neighbors
     inhome_neighbors = []
+    outhome_neighbors = []
 
     for neighbor in neighbors:
         if atoms[neighbor].atom_name in possible_inhome_neighbors:
             inhome_neighbors.append(neighbor)
+        else:
+            outhome_neighbors.append(neighbor)
 
     # now we are left only inhome neighbors in the 'inhome_neighbors' list
 
     # find chunks of coefficients in the basis function list,
     # then keep those coefficients and make other's value 0
-
     for dyson in original_dyson_transition:
         if dyson.get('comment') == 'dyson right':
             basis_func_string = dyson.get('text')
@@ -92,7 +111,7 @@ for i, atom in enumerate(atoms):
             modified_basis_func_right = ['0'] * n_of_basis_functions  # taking list of zeros
             #for the atom itself avoid making zeros
             modified_basis_func_right[atom.coefficient_start_index: atom.coefficient_end_index] = basis_func_list[atom.coefficient_start_index: atom.coefficient_end_index]
-            # now the inhome_neighbors
+            # now consider the inhome_neighbors
             for inhome_neighbor in inhome_neighbors:
                 inhome_neighbor_start_idx = atoms[inhome_neighbor].coefficient_start_index
                 inhome_neighbor_end_idx = atoms[inhome_neighbor].coefficient_end_index
@@ -116,18 +135,148 @@ for i, atom in enumerate(atoms):
 
                 modified_basis_func_left[inhome_neighbor_start_idx: inhome_neighbor_end_idx] \
                     = basis_func_list[inhome_neighbor_start_idx: inhome_neighbor_end_idx + 1]
-            dyson.set('text', ' '.join(modified_basis_func_left))
+            dyson.set('text', " ".join(modified_basis_func_left))
 
     directory = './data/' + atom.atom_name + str(i + 1)
     filepath = os.path.join(directory, FILE_NAME)
 
     try:
         os.makedirs(directory, exist_ok=True)
-        new_dom.write(filepath)
-    except FileExistsError:
-        print('directory already exists')
+        new_dom.write(filepath, encoding="utf-8")
+        #new_root = new_dom.getroot()
+        #ET.tostring(new_dom).toprettyxml(indent="   ",  newl="",  encoding="").write(filepath, encoding="utf-8")
+        #xmlstr = minidom.parseString(ET.tostring(new_dom)).toprettyxml(indent="   ",  newl="",  encoding="")
+        #print(ET.tostring(new_dom))
+        #print(ET.tostring(new_root, encoding='utf8').decode('utf8'))
     except Exception as e:
         print(e)
 
 
+    # if atom doesn't have out-home neighbor then overlapping is invalid
+    if outhome_neighbors:
+        # now generate files for right overlap
+        dom_overlap = copy.deepcopy(tree)
+        dyson_transition_left_overlap = dom_overlap.find('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"][@comment="dyson left"]')
+        dyson_transition_right_overlap = dom_overlap.find('dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"][@comment="dyson right"]')
 
+        basis_func_string = dyson_transition_right_overlap.get('text')
+        right_basis_funcs = basis_func_string.split()
+
+        modified_basis_func_right = ['0'] * n_of_basis_functions  # taking list of zeros
+        #for the atom itself avoid making zeros
+        modified_basis_func_right[atom.coefficient_start_index: atom.coefficient_end_index] = right_basis_funcs[atom.coefficient_start_index: atom.coefficient_end_index]
+        # now consider the inhome_neighbors
+        for inhome_neighbor in inhome_neighbors:
+            inhome_neighbor_start_idx = atoms[inhome_neighbor].coefficient_start_index
+            inhome_neighbor_end_idx = atoms[inhome_neighbor].coefficient_end_index
+
+            modified_basis_func_right[inhome_neighbor_start_idx: inhome_neighbor_end_idx] \
+                = right_basis_funcs[inhome_neighbor_start_idx: inhome_neighbor_end_idx + 1]
+        dyson_transition_right_overlap.set('text', ' '.join(modified_basis_func_right))
+
+
+        basis_func_string = dyson_transition_left_overlap.get('text')
+        left_basis_funcs = basis_func_string.split()
+
+        modified_basis_func_left = ['0'] * n_of_basis_functions  # taking list of zeros
+        #for the atom's outhome neighbor itself and the neighbors residents avoid making zeros
+        for outhome_neighbor_atom in outhome_neighbors:
+            #for the atom's outhome neighbor itself
+
+            modified_basis_func_left[atoms[outhome_neighbor_atom].coefficient_start_index: atoms[outhome_neighbor_atom].coefficient_end_index] \
+                = left_basis_funcs[atoms[outhome_neighbor_atom].coefficient_start_index: atoms[outhome_neighbor_atom].coefficient_end_index]
+            # now consider the neighbor's residents
+
+            # for each atom get all the neighbors
+            neighboring_neighbors = atoms[outhome_neighbor_atom].neighbors
+            # from the neighbor list only keep inhome neighbors
+            possible_inhome_neighbors = (molecule_structure.get_atom_definition_map()[atoms[outhome_neighbor_atom].atom_name]).possible_inhome_neighbors
+            neighboring_inhome_neighbors = []
+
+            for neighbor in neighboring_neighbors:
+                if atoms[neighbor].atom_name in possible_inhome_neighbors:
+                    neighboring_inhome_neighbors.append(neighbor)
+
+            for neighbor in neighboring_inhome_neighbors:
+                neighbor_start_idx = atoms[neighbor].coefficient_start_index
+                neighbor_end_idx = atoms[neighbor].coefficient_end_index
+
+                modified_basis_func_left[neighbor_start_idx: neighbor_end_idx] \
+                    = left_basis_funcs[neighbor_start_idx: neighbor_end_idx + 1]
+            dyson_transition_left_overlap.set('text', ' '.join(modified_basis_func_left))
+
+        directory = './data/' + atom.atom_name + str(i + 1) + '_right'
+        filepath = os.path.join(directory, FILE_NAME)
+
+        try:
+            os.makedirs(directory, exist_ok=True)
+            dom_overlap.write(filepath, encoding="utf-8")
+
+        except Exception as e:
+            print(e)
+
+        # now generate files for left overlap
+        dom_overlap = copy.deepcopy(tree)
+        dyson_transition_left_overlap = dom_overlap.find(
+            'dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"][@comment="dyson left"]')
+        dyson_transition_right_overlap = dom_overlap.find(
+            'dyson_molecular_orbitals/DMO[@transition="' + TRANSITION_NAME + '"][@comment="dyson right"]')
+
+        basis_func_string = dyson_transition_left_overlap.get('text')
+        left_basis_funcs = basis_func_string.split()
+
+        modified_basis_func_left = ['0'] * n_of_basis_functions  # taking list of zeros
+        # for the atom itself avoid making zeros
+        modified_basis_func_left[atom.coefficient_start_index: atom.coefficient_end_index] = left_basis_funcs[
+                                                                                              atom.coefficient_start_index: atom.coefficient_end_index]
+        # now consider the inhome_neighbors
+        for inhome_neighbor in inhome_neighbors:
+            inhome_neighbor_start_idx = atoms[inhome_neighbor].coefficient_start_index
+            inhome_neighbor_end_idx = atoms[inhome_neighbor].coefficient_end_index
+
+            modified_basis_func_left[inhome_neighbor_start_idx: inhome_neighbor_end_idx] \
+                = left_basis_funcs[inhome_neighbor_start_idx: inhome_neighbor_end_idx + 1]
+        dyson_transition_left_overlap.set('text', ' '.join(modified_basis_func_left))
+
+        basis_func_string = dyson_transition_right_overlap.get('text')
+        right_basis_funcs = basis_func_string.split()
+
+        modified_basis_func_right = ['0'] * n_of_basis_functions  # taking list of zeros
+        # for the atom's outhome neighbor itself and the neighbors residents avoid making zeros
+        for outhome_neighbor_atom in outhome_neighbors:
+            # for the atom's outhome neighbor itself
+
+            modified_basis_func_right[atoms[outhome_neighbor_atom].coefficient_start_index: atoms[
+                outhome_neighbor_atom].coefficient_end_index] \
+                = right_basis_funcs[atoms[outhome_neighbor_atom].coefficient_start_index: atoms[
+                outhome_neighbor_atom].coefficient_end_index]
+            # now consider the neighbor's residents
+
+            # for each atom get all the neighbors
+            neighboring_neighbors = atoms[outhome_neighbor_atom].neighbors
+            # from the neighbor list only keep inhome neighbors
+            possible_inhome_neighbors = (molecule_structure.get_atom_definition_map()[
+                atoms[outhome_neighbor_atom].atom_name]).possible_inhome_neighbors
+            neighboring_inhome_neighbors = []
+
+            for neighbor in neighboring_neighbors:
+                if atoms[neighbor].atom_name in possible_inhome_neighbors:
+                    neighboring_inhome_neighbors.append(neighbor)
+
+            for neighbor in neighboring_inhome_neighbors:
+                neighbor_start_idx = atoms[neighbor].coefficient_start_index
+                neighbor_end_idx = atoms[neighbor].coefficient_end_index
+
+                modified_basis_func_right[neighbor_start_idx: neighbor_end_idx] \
+                    = left_basis_funcs[neighbor_start_idx: neighbor_end_idx + 1]
+            dyson_transition_right_overlap.set('text', ' '.join(modified_basis_func_right))
+
+        directory = './data/' + atom.atom_name + str(i + 1) + '_left'
+        filepath = os.path.join(directory, FILE_NAME)
+
+        try:
+            os.makedirs(directory, exist_ok=True)
+            dom_overlap.write(filepath, encoding="utf-8")
+
+        except Exception as e:
+            print(e)
